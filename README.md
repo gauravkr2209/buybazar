@@ -1,36 +1,63 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# PaisaPath
 
-## Getting Started
+PaisaPath is an India-first price-comparison storefront concept built with Next.js App Router, TypeScript, Tailwind CSS, Prisma, and PostgreSQL.
 
-First, run the development server:
+> **Demo data:** The current catalogue contains 120 fictional products, seller names, INR prices, and price-history points. They are illustrative only—not verified products, merchant listings, live offers, discounts, or historical prices. No price scraping or live provider integration is enabled.
 
-```bash
+## Run locally
+
+Requirements: Node.js compatible with the installed Next.js version and npm.
+
+```powershell
+npm ci
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`. The storefront and catalogue work without a database.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Features in this repository
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- Responsive storefront, category pages, product detail pages, and fictional seller comparisons.
+- Search, category and brand filters, INR demo-price filters, sorting, and URL-backed filter state.
+- Illustrative price-history charts, with demo-data labels.
+- Prisma/PostgreSQL schema and an initial additive migration.
+- Better Auth configuration, user-scoped watchlist and target-alert APIs.
+- Provider adapter and validation contracts for future authorized integrations.
+- Sitemap, robots metadata, and focused tests.
 
-## Learn More
+Database-backed accounts, saved products, alerts, and real merchant comparisons are not available until the external services described below are configured.
 
-To learn more about Next.js, take a look at the following resources:
+## PostgreSQL and authentication setup
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. Copy `.env.example` to `.env` and set `DATABASE_URL`, `BETTER_AUTH_URL`, and a securely generated `BETTER_AUTH_SECRET` of at least 32 characters.
+2. Generate the Prisma client and apply the migration:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+   ```powershell
+   npm run db:generate
+   npm run db:migrate
+   ```
 
-## Deploy on Vercel
+3. Optionally insert the explicitly fictional demo catalogue:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+   ```powershell
+   npm run db:seed
+   ```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Review the migration and back up any existing database before applying it. The seed refuses a collision with a live product slug, but the migration has not been applied as part of this repository setup.
+
+For internal scheduled routes, configure a separate high-entropy `CRON_SECRET`. Keep `.env` and production secrets out of source control; configure production values using the hosting provider's environment-variable settings. `SITE_URL` should be the canonical HTTPS site origin.
+
+## Checks
+
+```powershell
+npm run lint
+npx tsc --noEmit
+npm test
+npm run build
+```
+
+## Authorized price data
+
+No provider adapter is currently enabled. The protected synchronization route deliberately returns `503` until a provider with approved credentials and verified terms is implemented. Do not scrape websites, bypass authentication or anti-bot protections, or present demo data as live. See [docs/authorized-data-integrations.md](./docs/authorized-data-integrations.md) for access requirements and remaining setup.
+
+The existing adapter contract supports validation, exact product/variant matching, retry handling, and persisting attributed offers and observations. Email or push delivery is not configured; queued alert notifications do not mean a notification was delivered.
