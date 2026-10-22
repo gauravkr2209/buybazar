@@ -1,37 +1,72 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { authClient } from "@/lib/auth-client";
+import { GithubAuthProvider, getRedirectResult, signInWithRedirect } from "firebase/auth";
+import { firebaseClientIsConfigured } from "@/lib/firebase-config";
+import { getFirebaseClientAuth } from "@/lib/firebase-client";
 
 export default function AuthForm() {
   const router = useRouter();
-  const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  useEffect(() => {
+    if (!firebaseClientIsConfigured()) return;
+    let active = true;
+    void getRedirectResult(getFirebaseClientAuth())
+      .then(async (result) => {
+        if (!result) return;
+        const idToken = await result.user.getIdToken();
+        const response = await fetch("/api/auth/session", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ idToken }),
+        });
+        if (!response.ok) {
+          const body: unknown = await response.json();
+          const message =
+            typeof body === "object" &&
+            body !== null &&
+            "error" in body &&
+            typeof body.error === "object" &&
+            body.error !== null &&
+            "message" in body.error &&
+            typeof body.error.message === "string"
+              ? body.error.message
+              : `Sign-in failed (${response.status}).`;
+          throw new Error(message);
+        }
+        if (active) {
+          router.replace("/account");
+          router.refresh();
+        }
+      })
+      .catch((cause: unknown) => {
+        if (active) {
+          setError(cause instanceof Error ? cause.message : "GitHub sign-in failed. Please try again.");
+        }
+      })
+      .finally(() => {
+        if (active) setBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [router]);
+
+  async function signIn() {
+    if (!firebaseClientIsConfigured()) {
+      setError("Firebase web configuration is missing. Contact the site administrator.");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
-      const result =
-        mode === "sign-in"
-          ? await authClient.signIn.email({ email, password })
-          : await authClient.signUp.email({ name, email, password });
-      if (result.error) {
-        setError(result.error.message ?? "Authentication failed. Please try again.");
-        return;
-      }
-      router.replace("/account");
-      router.refresh();
-    } catch {
-      setError("Authentication service is unavailable. Check the database and auth configuration.");
-    } finally {
+      await signInWithRedirect(getFirebaseClientAuth(), new GithubAuthProvider());
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "GitHub sign-in failed. Please try again.");
       setBusy(false);
     }
   }
@@ -39,61 +74,12 @@ export default function AuthForm() {
   return (
     <section className="account-panel" aria-labelledby="auth-title">
       <p className="eyebrow"><span className="eyebrow__dot" /> Your PaisaPath account</p>
-      <h1 id="auth-title">{mode === "sign-in" ? "Welcome back." : "Create your account."}</h1>
+      <h1 id="auth-title">Welcome to PaisaPath.</h1>
       <p>Keep a private shortlist and manage your target-price alerts.</p>
-      <form className="account-form" onSubmit={submit}>
-        {mode === "sign-up" && (
-          <label>
-            Name
-            <input
-              autoComplete="name"
-              required
-              maxLength={100}
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
-          </label>
-        )}
-        <label>
-          Email
-          <input
-            type="email"
-            autoComplete="email"
-            required
-            maxLength={254}
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-          />
-        </label>
-        <label>
-          Password
-          <input
-            type="password"
-            autoComplete={mode === "sign-in" ? "current-password" : "new-password"}
-            minLength={8}
-            maxLength={128}
-            required
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-          />
-        </label>
-        {error && <p className="account-form__error" role="alert">{error}</p>}
-        <button className="button button--dark" type="submit" disabled={busy}>
-          {busy ? "Please wait…" : mode === "sign-in" ? "Sign in" : "Create account"}
-        </button>
-      </form>
-      <p className="account-panel__switch">
-        {mode === "sign-in" ? "New to PaisaPath?" : "Already have an account?"}{" "}
-        <button
-          type="button"
-          onClick={() => {
-            setMode(mode === "sign-in" ? "sign-up" : "sign-in");
-            setError("");
-          }}
-        >
-          {mode === "sign-in" ? "Create an account" : "Sign in"}
-        </button>
-      </p>
+      {error && <p className="account-form__error" role="alert">{error}</p>}
+      <button className="button button--dark" type="button" onClick={() => void signIn()} disabled={busy}>
+        {busy ? "Redirecting to GitHub…" : "Continue with GitHub"}
+      </button>
       <Link className="detail-back-link" href="/">Back to shopping</Link>
     </section>
   );

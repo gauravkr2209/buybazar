@@ -1,96 +1,140 @@
-import { prisma } from "@/lib/prisma";
+import { createHash } from "node:crypto";
+import { FieldValue } from "firebase-admin/firestore";
+import { getFirebaseFirestore } from "@/lib/firebase-admin";
+import { priceToMinorUnits } from "@/lib/providers/normalize";
 
 const OBSERVATION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const PAGE_SIZE = 500;
+const PRODUCT_BATCH_SIZE = 30;
 
-export async function evaluatePriceAlerts(afterId?: string) {
+type AlertRecord = {
+  id: string;
+  productSlug: string;
+  targetPrice: string;
+  cursorKey: string;
+  isDemo: boolean;
+  userId: string;
+};
+
+type ObservationRecord = {
+  id: string;
+  productSlug: string;
+  price: string;
+  observedAt: { toDate(): Date };
+  freshnessExpiresAt: { toDate(): Date };
+};
+
+export async function evaluatePriceAlerts(afterCursor?: string) {
+  const db = getFirebaseFirestore();
   const now = new Date();
   const cutoff = new Date(now.getTime() - OBSERVATION_MAX_AGE_MS);
-  const alerts = await prisma.targetPriceAlert.findMany({
-    where: { enabled: true },
-    orderBy: { id: "asc" },
-    take: 500,
-    ...(afterId ? { cursor: { id: afterId }, skip: 1 } : {}),
-    select: {
-      id: true,
-      userId: true,
-      productId: true,
-      targetPrice: true,
-    },
-  });
-  if (alerts.length === 0) {
+  let query = db
+    .collectionGroup("alerts")
+    .where("enabled", "==", true)
+    .orderBy("cursorKey")
+    .limit(PAGE_SIZE);
+  if (afterCursor) query = query.startAfter(afterCursor);
+  const alertSnapshot = await query.get();
+  if (alertSnapshot.empty) {
     return { evaluated: 0, queued: 0, nextCursor: null };
   }
 
-  const productIds = [...new Set(alerts.map((alert) => alert.productId))];
-  const eligibleObservations = {
-    productId: { in: productIds },
-    isDemo: false,
-    availability: "AVAILABLE" as const,
-    currency: "INR",
-    observedAt: { gte: cutoff, lte: now },
-    freshnessExpiresAt: { gt: now },
-  };
-  const productMinimums = await prisma.priceObservation.groupBy({
-    by: ["productId"],
-    where: {
-      ...eligibleObservations,
-    },
-    _min: { price: true },
+  const alerts: AlertRecord[] = alertSnapshot.docs.map((document) => {
+    const data = document.data();
+    return {
+      id: document.id,
+      productSlug: String(data.productSlug),
+      targetPrice: String(data.targetPrice),
+      cursorKey: String(data.cursorKey),
+      isDemo: data.isDemo === true,
+      userId: document.ref.parent.parent?.id ?? "",
+    };
   });
-  const minima = productMinimums.flatMap(({ productId, _min }) =>
-    _min.price === null ? [] : [{ productId, price: _min.price }],
-  );
-  const observations = minima.length
-    ? await prisma.priceObservation.findMany({
-        where: {
-          ...eligibleObservations,
-          OR: minima,
-        },
-        orderBy: [{ productId: "asc" }, { observedAt: "desc" }],
-        select: {
-          id: true,
-          productId: true,
-          price: true,
-          currency: true,
-          observedAt: true,
-        },
-      })
-    : [];
-
-  const lowestFreshObservation = new Map<
-    string,
-    (typeof observations)[number]
-  >();
-  for (const observation of observations) {
-    if (!lowestFreshObservation.has(observation.productId)) {
-      lowestFreshObservation.set(observation.productId, observation);
+  const productSlugs = [...new Set(alerts.filter((alert) => !alert.isDemo).map((alert) => alert.productSlug))];
+  const observations: ObservationRecord[] = [];
+  for (let offset = 0; offset < productSlugs.length; offset += PRODUCT_BATCH_SIZE) {
+    const slugs = productSlugs.slice(offset, offset + PRODUCT_BATCH_SIZE);
+    const snapshot = await db
+      .collectionGroup("observations")
+      .where("productSlug", "in", slugs)
+      .where("isDemo", "==", false)
+      .where("availability", "==", "AVAILABLE")
+      .where("currency", "==", "INR")
+      .where("observedAt", ">=", cutoff)
+      .where("freshnessExpiresAt", ">", now)
+      .limit(500)
+      .get();
+    for (const document of snapshot.docs) {
+      const data = document.data();
+      const observedAt = data.observedAt as ObservationRecord["observedAt"];
+      const freshnessExpiresAt = data.freshnessExpiresAt as ObservationRecord["freshnessExpiresAt"];
+      if (
+        observedAt.toDate() <= now &&
+        freshnessExpiresAt.toDate() > now &&
+        /^\d+(?:\.\d{1,2})?$/.test(String(data.price))
+      ) {
+        observations.push({
+          id: document.id,
+          productSlug: String(data.productSlug),
+          price: String(data.price),
+          observedAt,
+          freshnessExpiresAt,
+        });
+      }
     }
   }
 
-  const notifications = alerts.flatMap((alert) => {
-    const observation = lowestFreshObservation.get(alert.productId);
-    if (!observation || observation.price.greaterThan(alert.targetPrice)) return [];
-    return [{
-      alertId: alert.id,
-      userId: alert.userId,
-      productId: alert.productId,
-      observationId: observation.id,
-      status: "PENDING" as const,
-      message:
-        "A fresh verified price observation met your target. Review the product page for the source and timestamp.",
-    }];
-  });
+  const lowestFreshObservation = new Map<string, ObservationRecord>();
+  for (const observation of observations) {
+    const current = lowestFreshObservation.get(observation.productSlug);
+    if (
+      !current ||
+      priceToMinorUnits(observation.price) < priceToMinorUnits(current.price)
+    ) {
+      lowestFreshObservation.set(observation.productSlug, observation);
+    }
+  }
 
-  const queued = notifications.length
-    ? await prisma.alertNotification.createMany({
-        data: notifications,
-        skipDuplicates: true,
-      })
-    : { count: 0 };
+  let queued = 0;
+  for (const alert of alerts) {
+    if (alert.isDemo) continue;
+    const observation = lowestFreshObservation.get(alert.productSlug);
+    if (
+      !observation ||
+      priceToMinorUnits(observation.price) > priceToMinorUnits(alert.targetPrice)
+    ) continue;
+    const userId = alert.userId;
+    if (!userId) continue;
+    const alertRef = db.collection("users").doc(userId).collection("alerts").doc(alert.id);
+    const notificationId = createHash("sha256")
+      .update(`${alert.id}\0${observation.id}`)
+      .digest("hex");
+    const notificationRef = alertRef.collection("notifications").doc(notificationId);
+    const created = await db.runTransaction(async (transaction) => {
+      const [currentAlert, existingNotification] = await transaction.getAll(
+        alertRef,
+        notificationRef,
+      );
+      if (!currentAlert.exists || currentAlert.get("enabled") !== true || existingNotification.exists) {
+        return false;
+      }
+      transaction.create(notificationRef, {
+        observationId: observation.id,
+        status: "PENDING",
+        message: "A fresh verified price observation met your target. Review the product page for its source and timestamp.",
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      return true;
+    });
+    if (created) queued += 1;
+  }
 
   return {
     evaluated: alerts.length,
-    queued: queued.count,
-    nextCursor: alerts.length === 500 ? alerts[alerts.length - 1]?.id ?? null : null,
+    queued,
+    nextCursor:
+      alertSnapshot.size === PAGE_SIZE
+        ? alerts[alerts.length - 1]?.cursorKey ?? null
+        : null,
   };
 }

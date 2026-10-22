@@ -18,6 +18,11 @@ export type ProductIdentifierLink = ProviderIdentifier & {
   product: IdentifiedProduct;
 };
 
+export function priceToMinorUnits(price: string): number {
+  const [whole, fraction = ""] = price.split(".");
+  return Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
+}
+
 export function normalizeIdentifier(identifier: ProviderIdentifier): ProviderIdentifier {
   if (
     !identifier ||

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   findExactProductMatch,
   normalizeProviderOffer,
+  priceToMinorUnits,
   retryDelayMs,
 } from "../src/lib/providers/normalize";
 import { fetchWithRetry } from "../src/lib/providers/sync";
@@ -35,6 +36,13 @@ test("normalizes provider identifiers and validates decimal-safe INR offers", ()
     { type: "gtin", value: "1234567890123" },
   ]);
   assert.equal(normalized.merchantName, "Example Merchant");
+});
+
+test("converts INR decimal strings to exact paise for ordering and comparisons", () => {
+  assert.equal(priceToMinorUnits("12"), 1200);
+  assert.equal(priceToMinorUnits("12.5"), 1250);
+  assert.equal(priceToMinorUnits("12.05"), 1205);
+  assert.equal(priceToMinorUnits("9999999999.99"), 999999999999);
 });
 
 test("rejects malformed prices, unsecured URLs, and stale timestamp ordering", () => {

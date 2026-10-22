@@ -11,7 +11,7 @@ export async function POST(request: Request) {
     return apiError("Unauthorized scheduled-job request.", 401);
   }
   if (!databaseIsConfigured()) {
-    return serviceUnavailable("Configure the database before evaluating price alerts.");
+    return serviceUnavailable("Configure Firebase before evaluating price alerts.");
   }
 
   const url = new URL(request.url);

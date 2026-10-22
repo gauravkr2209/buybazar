@@ -1,9 +1,9 @@
 import { Suspense } from "react";
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import AccountDashboard from "@/components/account-dashboard";
-import { authIsConfigured, getAuth } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { authIsConfigured } from "@/lib/auth";
+import { getFirebaseFirestore } from "@/lib/firebase-admin";
+import { getAuthenticatedUser } from "@/lib/request-auth";
 
 export default function AccountPage() {
   return (
@@ -22,69 +22,77 @@ export default function AccountPage() {
 }
 
 async function AccountPageContent() {
-  const requestHeaders = await headers();
   if (!authIsConfigured()) {
     return (
       <main className="account-page">
         <section className="account-panel" role="status">
           <h1>Account services need setup.</h1>
-          <p>Set DATABASE_URL, BETTER_AUTH_URL, and a 32-character BETTER_AUTH_SECRET using .env.example.</p>
+          <p>Configure Firebase Authentication and server credentials using .env.example.</p>
         </section>
       </main>
     );
   }
 
-  const session = await getAuth().api.getSession({ headers: requestHeaders });
-  if (!session?.user) redirect("/sign-in");
+  const user = await getAuthenticatedUser();
+  if (!user) redirect("/sign-in");
 
+  const db = getFirebaseFirestore();
+  const userRef = db.collection("users").doc(user.id);
   const [watchlist, alerts] = await Promise.all([
-    prisma.watchlistItem.findMany({
-      where: { userId: session.user.id },
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        product: {
-          select: {
-            slug: true,
-            name: true,
-            brand: true,
-            variant: true,
-            isDemo: true,
-          },
-        },
-      },
-    }),
-    prisma.targetPriceAlert.findMany({
-      where: { userId: session.user.id },
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        targetPrice: true,
-        enabled: true,
-        product: { select: { slug: true, name: true, isDemo: true } },
-        notifications: {
-          orderBy: { createdAt: "desc" },
-          take: 1,
-          select: { status: true, message: true, createdAt: true },
-        },
-      },
-    }),
+    userRef.collection("watchlist").orderBy("createdAt", "desc").get(),
+    userRef.collection("alerts").orderBy("createdAt", "desc").get(),
   ]);
+  const accountAlerts = await Promise.all(
+    alerts.docs.map(async (alert) => {
+      const data = alert.data();
+      const notifications = await alert.ref
+        .collection("notifications")
+        .orderBy("createdAt", "desc")
+        .limit(1)
+        .get();
+      const product = await db.collection("products").doc(data.productSlug).get();
+      const productData = product.data();
+      return {
+        id: alert.id,
+        targetPrice: String(data.targetPrice),
+        enabled: data.enabled === true,
+        product: {
+          slug: String(data.productSlug),
+          name: String(data.productName ?? productData?.name ?? data.productSlug),
+          isDemo: data.isDemo === true,
+        },
+        notifications: notifications.docs.map((notification) => {
+          const notificationData = notification.data();
+          const createdAt = notificationData.createdAt?.toDate?.() ?? new Date();
+          return {
+            status: String(notificationData.status ?? "PENDING"),
+            message: String(notificationData.message ?? "Price alert matched."),
+            createdAt: createdAt.toISOString(),
+          };
+        }),
+      };
+    }),
+  );
 
   return (
     <main className="account-page">
       <AccountDashboard
-        name={session.user.name}
-        email={session.user.email}
-        watchlist={watchlist}
-        alerts={alerts.map((alert) => ({
-          ...alert,
-          targetPrice: alert.targetPrice.toFixed(2),
-          notifications: alert.notifications.map((notification) => ({
-            ...notification,
-            createdAt: notification.createdAt.toISOString(),
-          })),
-        }))}
+        name={user.name}
+        email={user.email}
+        watchlist={watchlist.docs.map((item) => {
+          const data = item.data();
+          return {
+            id: item.id,
+            product: {
+              slug: String(data.slug),
+              name: String(data.name),
+              brand: String(data.brand),
+              variant: String(data.variant),
+              isDemo: data.isDemo === true,
+            },
+          };
+        })}
+        alerts={accountAlerts}
       />
     </main>
   );

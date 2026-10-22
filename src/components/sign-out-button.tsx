@@ -2,7 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { authClient } from "@/lib/auth-client";
+import { firebaseClientIsConfigured } from "@/lib/firebase-config";
+import { getFirebaseClientAuth } from "@/lib/firebase-client";
+import { signOut as firebaseSignOut } from "firebase/auth";
 
 export default function SignOutButton() {
   const router = useRouter();
@@ -11,15 +13,16 @@ export default function SignOutButton() {
   async function signOut() {
     setError("");
     try {
-      const result = await authClient.signOut();
-      if (result.error) {
-        setError(result.error.message ?? "Unable to sign out.");
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) {
+        setError("Unable to clear your PaisaPath session. Please try again.");
         return;
       }
+      if (firebaseClientIsConfigured()) await firebaseSignOut(getFirebaseClientAuth());
       router.replace("/");
       router.refresh();
-    } catch {
-      setError("Authentication service is unavailable. Please try again.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Authentication service is unavailable. Please try again.");
     }
   }
 

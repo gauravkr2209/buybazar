@@ -3,10 +3,30 @@ import test from "node:test";
 import { NextRequest } from "next/server";
 import { GET } from "../src/app/api/products/route";
 
-test("product API serves the demo fallback with filtering and pagination", async () => {
-  const previousDatabaseUrl = process.env.DATABASE_URL;
-  delete process.env.DATABASE_URL;
+const firebaseVariables = [
+  "FIREBASE_PROJECT_ID",
+  "FIREBASE_CLIENT_EMAIL",
+  "FIREBASE_PRIVATE_KEY",
+] as const;
+
+async function withFirebaseDisabled(run: () => Promise<void>) {
+  const previous = Object.fromEntries(
+    firebaseVariables.map((name) => [name, process.env[name]]),
+  );
+  for (const name of firebaseVariables) delete process.env[name];
   try {
+    await run();
+  } finally {
+    for (const name of firebaseVariables) {
+      const value = previous[name];
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
+test("product API serves the demo fallback with filtering and pagination", async () => {
+  await withFirebaseDisabled(async () => {
     const response = await GET(
       new NextRequest(
         "http://localhost/api/products?category=smartphones&q=aster&page=1&pageSize=10&sort=name",
@@ -20,16 +40,11 @@ test("product API serves the demo fallback with filtering and pagination", async
     assert.ok(body.products.every((product: { dataStatus?: string; brand: string }) =>
       product.brand === "Aster" || product.brand === "Paper Sky",
     ));
-  } finally {
-    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = previousDatabaseUrl;
-  }
+  });
 });
 
 test("product API validates page size and category values", async () => {
-  const previousDatabaseUrl = process.env.DATABASE_URL;
-  delete process.env.DATABASE_URL;
-  try {
+  await withFirebaseDisabled(async () => {
     const invalidSize = await GET(
       new NextRequest("http://localhost/api/products?pageSize=100"),
     );
@@ -38,8 +53,5 @@ test("product API validates page size and category values", async () => {
     );
     assert.equal(invalidSize.status, 400);
     assert.equal(invalidCategory.status, 400);
-  } finally {
-    if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = previousDatabaseUrl;
-  }
+  });
 });

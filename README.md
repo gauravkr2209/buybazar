@@ -1,51 +1,48 @@
 # PaisaPath
 
-PaisaPath is an India-first price-comparison storefront concept built with Next.js App Router, TypeScript, Tailwind CSS, Prisma, and PostgreSQL.
+PaisaPath is an India-first price-comparison storefront concept built with Next.js App Router, TypeScript, Tailwind CSS, Firebase Authentication, and Cloud Firestore.
 
-> **Demo data:** The current catalogue contains 120 fictional products, seller names, INR prices, and price-history points. They are illustrative only—not verified products, merchant listings, live offers, discounts, or historical prices. No price scraping or live provider integration is enabled.
+> **Demo data:** The current catalogue contains 120 fictional products, seller names, INR prices, and price-history points. They are illustrative only—not verified products, merchant listings, live offers, discounts, or historical prices. Do not present demo data as live.
 
 ## Run locally
 
-Requirements: Node.js compatible with the installed Next.js version and npm.
+Requirements: Node.js 22 or newer and npm.
 
 ```powershell
 npm ci
 npm run dev
 ```
 
-Open `http://localhost:3000`. The storefront and catalogue work without a database.
+Open `http://localhost:3000`. The storefront and clearly labelled demo catalogue work without Firebase configuration.
 
-## Features in this repository
+## Features
 
-- Responsive storefront, category pages, product detail pages, and fictional seller comparisons.
-- Search, category and brand filters, INR demo-price filters, sorting, and URL-backed filter state.
-- Illustrative price-history charts, with demo-data labels.
-- Prisma/PostgreSQL schema and an initial additive migration.
-- Better Auth configuration, user-scoped watchlist and target-alert APIs.
-- Provider adapter and validation contracts for future authorized integrations.
-- Sitemap, robots metadata, and focused tests.
+- Responsive storefront, category pages, product detail pages, fictional seller comparisons, search, and product filters.
+- Mock price-history charts with explicit demo labels.
+- Firebase GitHub sign-in, secure server session cookies, private Firestore watchlists, and target-price alert records.
+- Firestore server-side persistence for verified product identities, offers, and attributed observations.
+- Firestore security rules, query indexes, sitemap, robots metadata, and focused tests.
 
-Database-backed accounts, saved products, alerts, and real merchant comparisons are not available until the external services described below are configured.
+Firebase-backed features remain unavailable until the project configuration and credentials in `.env.example` are configured. No live merchant provider is active by default.
 
-## PostgreSQL and authentication setup
+## Firebase setup
 
-1. Copy `.env.example` to `.env` and set `DATABASE_URL`, `BETTER_AUTH_URL`, and a securely generated `BETTER_AUTH_SECRET` of at least 32 characters.
-2. Generate the Prisma client and apply the migration:
-
-   ```powershell
-   npm run db:generate
-   npm run db:migrate
-   ```
-
-3. Optionally insert the explicitly fictional demo catalogue:
+1. Create or select a Firebase project and register a Web app. Copy its Web configuration into the `NEXT_PUBLIC_FIREBASE_*` variables in `.env`.
+2. In Firebase Authentication, enable GitHub. Create a GitHub OAuth App, enter its Client ID and Client Secret in Firebase, and configure the callback URL shown by Firebase in the GitHub app. Add the production domain to Firebase's authorized domains.
+3. Create a Cloud Firestore database. Deploy `firestore.rules` and `firestore.indexes.json` from the Firebase CLI:
 
    ```powershell
-   npm run db:seed
+   npx firebase-tools deploy --only firestore --project ykfenqrivyxcdbqtuokc
    ```
 
-Review the migration and back up any existing database before applying it. The seed refuses a collision with a live product slug, but the migration has not been applied as part of this repository setup.
+4. Create a Firebase Admin service account and set `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY` in the server environment. Never expose the private key to browser code or commit it.
+5. Set `SITE_URL` and a high-entropy `CRON_SECRET`. Configure the same required variables in Vercel Project Settings → Environment Variables, then redeploy.
 
-For internal scheduled routes, configure a separate high-entropy `CRON_SECRET`. Keep `.env` and production secrets out of source control; configure production values using the hosting provider's environment-variable settings. `SITE_URL` should be the canonical HTTPS site origin.
+Use `.env.example` as the variable checklist. Store the GitHub OAuth secret in Firebase Authentication and service-account/provider secrets in Vercel settings; do not send them in chat. Full instructions and current merchant access limitations are in [docs/authorized-data-integrations.md](./docs/authorized-data-integrations.md).
+
+## Scheduled endpoints
+
+The internal price-sync and alert-evaluation endpoints require `Authorization: Bearer <CRON_SECRET>`. They do no work unless Firebase is configured and an authorized provider adapter is registered. Alert records are queued only; no email or push notification is sent.
 
 ## Checks
 
@@ -55,9 +52,3 @@ npx tsc --noEmit
 npm test
 npm run build
 ```
-
-## Authorized price data
-
-No provider adapter is currently enabled. The protected synchronization route deliberately returns `503` until a provider with approved credentials and verified terms is implemented. Do not scrape websites, bypass authentication or anti-bot protections, or present demo data as live. See [docs/authorized-data-integrations.md](./docs/authorized-data-integrations.md) for access requirements and remaining setup.
-
-The existing adapter contract supports validation, exact product/variant matching, retry handling, and persisting attributed offers and observations. Email or push delivery is not configured; queued alert notifications do not mean a notification was delivered.

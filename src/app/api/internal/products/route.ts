@@ -1,12 +1,13 @@
-import { Prisma } from "@prisma/client";
+import { createHash } from "node:crypto";
+import { FieldValue } from "firebase-admin/firestore";
 import { NextRequest } from "next/server";
-import { categorySlug, productCategories } from "@/mocks/products";
+import { categorySlug, demoProducts, productCategories } from "@/mocks/products";
 import { apiError, serviceUnavailable } from "@/lib/api-response";
 import { databaseIsConfigured } from "@/lib/database-config";
+import { getFirebaseFirestore } from "@/lib/firebase-admin";
 import { isAuthorizedCronRequest } from "@/lib/cron-auth";
 import { normalizeIdentifier } from "@/lib/providers/normalize";
 import { ProviderOfferValidationError } from "@/lib/providers/types";
-import { prisma } from "@/lib/prisma";
 
 class ProductRegistrationConflict extends Error {}
 
@@ -22,7 +23,7 @@ export async function POST(request: NextRequest) {
     return apiError("Unauthorized catalog registration request.", 401);
   }
   if (!databaseIsConfigured()) {
-    return serviceUnavailable("Configure the database before registering products.");
+    return serviceUnavailable("Configure Firebase before registering products.");
   }
 
   let body: unknown;
@@ -101,77 +102,70 @@ export async function POST(request: NextRequest) {
     .trim()
     .toLocaleLowerCase("en-IN");
   try {
-    const result = await prisma.$transaction(async (transaction) => {
-      const existing = await transaction.product.findUnique({
-        where: { slug },
-        select: { id: true, isDemo: true },
-      });
-      if (existing?.isDemo) {
+    if (demoProducts.some((product) => product.slug === slug)) {
+      throw new ProductRegistrationConflict("A demo product slug cannot be converted into a live product.");
+    }
+    const db = getFirebaseFirestore();
+    const productRef = db.collection("products").doc(slug);
+    const identifierRefs = identifiers.map((identifier) =>
+      db.collection("productIdentifiers").doc(
+        createHash("sha256").update(`${identifier.type}\0${identifier.value}`).digest("hex"),
+      ),
+    );
+    const product = await db.runTransaction(async (transaction) => {
+      const [existingProduct, ...existingIdentifiers] = await transaction.getAll(
+        productRef,
+        ...identifierRefs,
+      );
+      if (existingProduct.exists && existingProduct.get("isDemo") === true) {
+        throw new ProductRegistrationConflict("A demo product cannot be converted into a live product.");
+      }
+      if (existingIdentifiers.some((identifier) =>
+        identifier.exists && identifier.get("productSlug") !== slug,
+      )) {
         throw new ProductRegistrationConflict(
-          "A demo product cannot be converted into a live product.",
+          "An identifier is already assigned to another product variant.",
         );
       }
-
-      const storedCategory = await transaction.category.upsert({
-        where: { slug: categorySlug(category) },
-        update: { name: category },
-        create: { slug: categorySlug(category), name: category },
-      });
-      const product = await transaction.product.upsert({
-        where: { slug },
-        update: {
-          name: (body.name as string).trim(),
-          brand: (body.brand as string).trim(),
-          variant: (body.variant as string).trim(),
-          variantKey: normalizedVariantKey,
-          categoryId: storedCategory.id,
-          catalogSourceName: (body.sourceName as string).trim(),
-          catalogSourceUrl: sourceUrl.toString(),
-          isDemo: false,
-        },
-        create: {
-          slug,
-          name: (body.name as string).trim(),
-          brand: (body.brand as string).trim(),
-          variant: (body.variant as string).trim(),
-          variantKey: normalizedVariantKey,
-          categoryId: storedCategory.id,
-          catalogSourceName: (body.sourceName as string).trim(),
-          catalogSourceUrl: sourceUrl.toString(),
-          isDemo: false,
-        },
-        select: { id: true, slug: true, name: true, isDemo: true },
-      });
-
-      for (const identifier of identifiers) {
-        const current = await transaction.productIdentifier.findUnique({
-          where: { type_value: identifier },
-          select: { productId: true },
+      const value = {
+        slug,
+        name: (body.name as string).trim(),
+        brand: (body.brand as string).trim(),
+        variant: (body.variant as string).trim(),
+        variantKey: normalizedVariantKey,
+        description: typeof body.description === "string" ? body.description.trim() : "",
+        attributes: isRecord(body.attributes) ? body.attributes : {},
+        category: { name: category, slug: categorySlug(category) },
+        identifiers,
+        sourceName: (body.sourceName as string).trim(),
+        sourceUrl: sourceUrl.toString(),
+        isDemo: false,
+        updatedAt: FieldValue.serverTimestamp(),
+      };
+      transaction.set(productRef, {
+        ...value,
+        ...(existingProduct.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+      }, { merge: true });
+      identifierRefs.forEach((reference, index) => {
+        transaction.set(reference, {
+          ...identifiers[index],
+          productSlug: slug,
+          updatedAt: FieldValue.serverTimestamp(),
         });
-        if (current && current.productId !== product.id) {
-          throw new ProductRegistrationConflict(
-            "An identifier is already assigned to another product variant.",
-          );
-        }
-        await transaction.productIdentifier.upsert({
-          where: { type_value: identifier },
-          update: {},
-          create: { ...identifier, productId: product.id },
-        });
-      }
-      return { product };
+      });
+      return {
+        slug,
+        name: value.name,
+        brand: value.brand,
+        variant: value.variant,
+        isDemo: false,
+      };
     });
 
-    return Response.json({ product: result.product }, { status: 201 });
+    return Response.json({ product }, { status: 201 });
   } catch (error) {
     if (error instanceof ProductRegistrationConflict) {
       return apiError(error.message, 409);
-    }
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2002"
-    ) {
-      return apiError("Product slug, variant, or identifier already exists.", 409);
     }
     throw error;
   }
