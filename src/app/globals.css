@@ -162,9 +162,11 @@ input:focus-visible {
 
 .category-nav {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
-  gap: clamp(23px, 4vw, 58px);
+  gap: 8px clamp(12px, 2vw, 24px);
   min-height: 42px;
+  padding: 8px 16px;
   border-top: 1px solid rgba(35, 77, 59, 0.045);
 }
 
@@ -1702,6 +1704,7 @@ input:focus-visible {
   }
 
   .category-nav {
+    flex-wrap: nowrap;
     min-height: 39px;
     justify-content: flex-start;
     gap: 25px;
