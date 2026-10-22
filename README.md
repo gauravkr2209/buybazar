@@ -6,7 +6,7 @@ PaisaPath is an India-first price-comparison storefront concept built with Next.
 
 ## Run locally
 
-Requirements: Node.js 22 or newer and npm.
+Requirements: Node.js 22.12 or newer and npm.
 
 ```powershell
 npm ci
