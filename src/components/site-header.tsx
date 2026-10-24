@@ -69,12 +69,6 @@ export default function SiteHeader() {
         </Link>
       </div>
       <nav className="category-nav" aria-label="Product categories">
-        <Link
-          className="category-nav__all"
-          href="/?#discover"
-        >
-          Explore all
-        </Link>
         {productCategories.map((category) => (
           <Link
             key={category}
