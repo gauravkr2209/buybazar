@@ -126,24 +126,6 @@ export default function ProductBrowser({
     });
   }
 
-  function selectAllCategories() {
-    if (initialCategory !== "All") {
-      startTransition(() => {
-        setFilters({ activeCategory: "All" });
-        const queryString = new URLSearchParams({
-          ...(query.trim() ? { q: query.trim() } : {}),
-          ...(brand ? { brand } : {}),
-          ...(minPrice ? { minPrice } : {}),
-          ...(maxPrice ? { maxPrice } : {}),
-          ...(sortMode !== "recommended" ? { sort: sortMode } : {}),
-        }).toString();
-        router.push(`/${queryString ? `?${queryString}` : ""}#discover`);
-      });
-      return;
-    }
-    updateUrl("category", "", { activeCategory: "All" });
-  }
-
   useEffect(() => {
     function handleSearch(event: Event) {
       if (event instanceof CustomEvent && typeof event.detail === "string") {
@@ -238,13 +220,6 @@ export default function ProductBrowser({
       </div>
 
       <div className="category-tabs" role="group" aria-label="Filter products by category">
-        <button
-          type="button"
-          aria-pressed={activeCategory === "All"}
-          onClick={selectAllCategories}
-        >
-          Everything
-        </button>
         {productCategories.map((category) => (
           <button
             key={category}
